@@ -25,13 +25,14 @@ import json
 import random
 from dataclasses import asdict
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 
 from src.simulation.problems import MISCONCEPTION_SIGN_ERROR, Skill, find_problem
 from src.student.behavior import StudentResponse, generate_response
 from src.student.learning import update_state
 from src.student.params import ToyBehaviorParams, ToyLearningParams
 from src.student.state import StableTendencies, StudentState
+from src.tutor.base import Tutor
 from src.tutor.simple_tutor import SimpleTutor
 
 
@@ -91,11 +92,19 @@ def _fmt_response(label: str, resp: StudentResponse) -> str:
     return "\n".join(lines)
 
 
-def run_episode(seed: int, verbose: bool = True) -> dict:
+def run_episode(seed: int, verbose: bool = True, tutor: Optional[Tutor] = None) -> dict:
+    """
+    `tutor` defaults to SimpleTutor (this module's original single-tutor demo
+    behavior, unchanged). The tutor-comparison experiment
+    (src/evaluation/tutor_comparison.py) passes in EffectiveTutor/WeakTutor
+    instead, reusing this exact function so both experiments run through
+    identical student-model code.
+    """
     rng = random.Random(seed)
     behavior_params = ToyBehaviorParams()
     learning_params = ToyLearningParams()
-    tutor = SimpleTutor()
+    if tutor is None:
+        tutor = SimpleTutor()
 
     state = initial_state()
     trace: dict = {"seed": seed}
@@ -163,17 +172,37 @@ def run_episode(seed: int, verbose: bool = True) -> dict:
         print(_fmt_response("post", post_response))
     trace["post_assessment"] = asdict(post_response)
 
+    target_skill = pre_problem.skill
+    knowledge_before = state_before_update.knowledge_of(target_skill)
+    knowledge_after = state.knowledge_of(target_skill)
+    misconception_before = state_before_update.misconception_strength(MISCONCEPTION_SIGN_ERROR)
+    misconception_after = state.misconception_strength(MISCONCEPTION_SIGN_ERROR)
+
     summary = {
         "seed": seed,
+        "tutor": type(tutor).__name__,
+        # immediate / aided performance -- NOT the primary tutor-quality signal, kept for comparison
         "p_correct_pre": pre_response.p_correct,
-        "p_correct_post": post_response.p_correct,
-        "delta_p_correct": post_response.p_correct - pre_response.p_correct,
         "correct_pre": pre_response.correct,
+        "p_correct_aided": aided_response.p_correct,
+        "correct_aided": aided_response.correct,
+        # independent post-tutoring performance -- the primary tutor-quality signal
+        "p_correct_post": post_response.p_correct,
         "correct_post": post_response.correct,
-        "knowledge_S3_before": state_before_update.knowledge_of(Skill.S3_TWO_STEP_LINEAR),
-        "knowledge_S3_after": state.knowledge_of(Skill.S3_TWO_STEP_LINEAR),
-        "misconception_before": state_before_update.misconception_strength(MISCONCEPTION_SIGN_ERROR),
-        "misconception_after": state.misconception_strength(MISCONCEPTION_SIGN_ERROR),
+        "delta_p_correct": post_response.p_correct - pre_response.p_correct,
+        # latent state change (from student/learning.py, not touched by this experiment)
+        "knowledge_before": knowledge_before,
+        "knowledge_after": knowledge_after,
+        "knowledge_delta": knowledge_after - knowledge_before,
+        "misconception_before": misconception_before,
+        "misconception_after": misconception_after,
+        "misconception_delta": misconception_after - misconception_before,
+        "confidence_before": state_before_update.confidence,
+        "confidence_after": state.confidence,
+        "engagement_before": state_before_update.engagement,
+        "engagement_after": state.engagement,
+        "learned": knowledge_after > knowledge_before,
+        "tutor_addressed_misconception": bool(tutor_action.addresses_misconception),
     }
     trace["summary"] = summary
 
